@@ -7,13 +7,48 @@
 <style>html,body{margin:0;background:#020913;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Noto Sans KR",sans-serif}body{display:flex;min-height:100vh;align-items:center;justify-content:center}.loading{text-align:center;padding:24px}.loading b{display:block;font-size:24px;margin-bottom:8px}.loading span{color:#8bacbf;font-size:13px}</style>
 </head>
 <body>
-<div class="loading"><b>TORI VOICE STAGE</b><span>좋은 날 영상 교체 적용 중...</span></div>
+<div class="loading"><b>TORI VOICE STAGE</b><span>음정 표기 업데이트 적용 중...</span></div>
 <script>
 (async()=>{
   try{
     const base='https://raw.githubusercontent.com/tatatotos/image-host/cfb25e72ca5002226aeda832945ad00d5fa47839/tori-voice-stage.html';
     let html=await (await fetch(base,{cache:'no-store'})).text();
-    html=html.replaceAll('4WkAVZ_ZsYM','2stwr_olRDw').replaceAll('v=8','v=9');
+
+    // Use the user-selected Good Day video.
+    html=html.replaceAll('4WkAVZ_ZsYM','2stwr_olRDw').replaceAll('v=8','v=10');
+
+    // Current/target pitch: scientific note code + Korean vocal octave/solfege.
+    html=html.replace(
+      '<div><div class="lab">내 음정</div><div class="big" id="note">--</div><div class="muted" id="hz">0 Hz</div></div>',
+      '<div><div class="lab">내 음정</div><div class="big" id="note">--</div><div class="muted" id="octNote">--옥타브 --</div><div class="muted" id="hz">0 Hz</div></div>'
+    );
+    html=html.replace(
+      '<div><div class="lab">목표 음정</div><div class="big" id="target">--</div><div class="muted" id="cents">YouTube 분석 중</div></div>',
+      '<div><div class="lab">목표 음정</div><div class="big" id="target">--</div><div class="muted" id="targetKor">--옥타브 --</div><div class="muted" id="cents">YouTube 분석 중</div></div>'
+    );
+
+    // Korean vocal-range convention: C4 = 2옥타브 도, C5 = 3옥타브 도.
+    html=html.replace(
+      "const h2m=f=>69+12*Math.log2(f/440);",
+      "const h2m=f=>69+12*Math.log2(f/440);const KOR=['도','도♯','레','레♯','미','파','파♯','솔','솔♯','라','라♯','시'];const korName=m=>{const q=Math.round(m),pc=((q%12)+12)%12,sci=Math.floor(q/12)-1,ko=sci-2;return ko+'옥타브 '+KOR[pc]};"
+    );
+
+    // Do not force detected notes into the previous octave. This keeps Hz and note code consistent.
+    html=html.replace(
+      "function smooth(m){if(m<0)return-1;if(lastM>0){while(m-lastM>7)m-=12;while(lastM-m>7)m+=12}sm.push(m);if(sm.length>5)sm.shift();let q=[...sm].sort((a,b)=>a-b);return q[q.length>>1]}",
+      "function smooth(m){if(m<0)return-1;sm.push(m);if(sm.length>5)sm.shift();let q=[...sm].sort((a,b)=>a-b);return q[q.length>>1]}"
+    );
+
+    html=html.replace(
+      "if(f>0){m=smooth(h2m(f));lastM=m;$('note').textContent=name(m);$('hz').textContent=f.toFixed(1)+' Hz'}else{$('note').textContent='--';$('hz').textContent='0 Hz'}",
+      "if(f>0){m=smooth(h2m(f));lastM=m;$('note').textContent=name(m);$('octNote').textContent=korName(m);$('hz').textContent=f.toFixed(1)+' Hz'}else{$('note').textContent='--';$('octNote').textContent='--옥타브 --';$('hz').textContent='0 Hz'}"
+    );
+
+    html=html.replace(
+      "function target(t){let n=at(t);$('target').textContent=n?name(n.pitch):'--';if(!n&&ready)$('cents').textContent='대기 중'}",
+      "function target(t){let n=at(t);$('target').textContent=n?name(n.pitch):'--';$('targetKor').textContent=n?korName(n.pitch):'--옥타브 --';if(!n&&ready)$('cents').textContent='대기 중'}"
+    );
+
     document.open();
     document.write(html);
     document.close();
