@@ -22,50 +22,95 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install requests beautifulsoup4 mido
 
-      - name: Download public reference MIDI
+      - name: Download Good Day reference MIDI
         run: |
           cat > /tmp/download_midi.py <<'PY'
+          import io
           import html
+          import zipfile
           import requests
           from bs4 import BeautifulSoup
           from urllib.parse import urljoin
 
-          PAGE='https://midiex.net/midi/161412'
+          PAGE='https://www.midishow.com/en/midi/iu-good-day-midi-download-159079'
+          ID='159079'
           s=requests.Session()
           s.headers.update({
-              'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36',
-              'Accept-Language':'ko-KR,ko;q=0.9,en;q=0.7'
+              'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/153 Safari/537.36',
+              'Accept-Language':'en-US,en;q=0.9,ko;q=0.8',
+              'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
           })
-          r=s.get(PAGE,timeout=20)
+          r=s.get(PAGE,timeout=25)
+          print('page',r.status_code,r.url,'bytes',len(r.content))
           r.raise_for_status()
           soup=BeautifulSoup(r.text,'html.parser')
-          href=''
-          for a in soup.find_all('a',href=True):
-              h=html.unescape(a.get('href',''))
-              text=a.get_text(' ',strip=True)
-              if 'download.php' in h and ('좋은날' in text or '.mid' in text.lower()):
-                  href=urljoin(PAGE,h);break
-          if not href:
+
+          candidates=[]
+          def add(u):
+              if not u: return
+              u=urljoin(PAGE,html.unescape(str(u)))
+              if u not in candidates: candidates.append(u)
+
+          # Explicit routes used by MidiShow versions plus anything exposed by the page.
+          add(f'https://www.midishow.com/en/midi/download?id={ID}')
+          add(f'https://www.midishow.com/midi/download?id={ID}')
+          add(f'https://www.midishow.com/en/midi/download/{ID}')
+          add(f'https://www.midishow.com/midi/download/{ID}')
+          for tag in soup.find_all(True):
+              for attr in ('href','src','data-url','data-href','data-download','data-src'):
+                  v=tag.get(attr)
+                  if not v: continue
+                  low=str(v).lower()
+                  text=tag.get_text(' ',strip=True).lower()
+                  if ('download' in low or '.mid' in low or ID in low) and ('midi' in low or 'download' in low or 'download' in text):
+                      add(v)
+
+          print('candidate urls:')
+          for u in candidates: print(' -',u)
+
+          found=None
+          for u in candidates:
+              try:
+                  d=s.get(u,headers={
+                      'Referer':PAGE,
+                      'Accept':'audio/midi,audio/x-midi,application/octet-stream,application/zip,*/*;q=0.8'
+                  },timeout=30,allow_redirects=True)
+                  data=d.content
+                  ctype=d.headers.get('content-type','')
+                  print('try',u,'=>',d.status_code,d.url,ctype,'len',len(data),'head',repr(data[:20]))
+                  if data[:4]==b'MThd':
+                      found=data;break
+                  if data[:2]==b'PK':
+                      try:
+                          z=zipfile.ZipFile(io.BytesIO(data))
+                          for name in z.namelist():
+                              raw=z.read(name)
+                              if raw[:4]==b'MThd':
+                                  found=raw;break
+                          if found: break
+                      except Exception as ze:
+                          print('zip parse error',ze)
+              except Exception as e:
+                  print('candidate failed',u,e)
+
+          if not found:
+              # Keep useful diagnostics in the Actions log.
               for a in soup.find_all('a',href=True):
-                  h=html.unescape(a.get('href',''))
-                  if 'download.php' in h and 'bo_table=midi' in h:
-                      href=urljoin(PAGE,h);break
-          if not href:
-              raise SystemExit('MIDI attachment URL not found')
-          d=s.get(href,headers={'Referer':PAGE},timeout=25,allow_redirects=True)
-          d.raise_for_status()
-          data=d.content
-          if len(data)<100 or data[:4] != b'MThd':
-              raise SystemExit('Downloaded attachment is not MIDI: %r len=%d' % (data[:20],len(data)))
-          open('goodday.mid','wb').write(data)
-          print('downloaded',len(data),'bytes',href)
+                  tx=a.get_text(' ',strip=True)
+                  hv=a.get('href','')
+                  if 'download' in tx.lower() or 'download' in hv.lower() or '.mid' in hv.lower():
+                      print('PAGE LINK',repr(tx),repr(hv))
+              raise SystemExit('Could not obtain MIDI bytes from MidiShow')
+
+          open('goodday.mid','wb').write(found)
+          print('MIDI OK',len(found),'bytes')
           PY
           python /tmp/download_midi.py
 
-      - name: Convert MIDI to target-note timeline
+      - name: Convert MIDI to fixed target-note timeline
         run: |
           cat > /tmp/midi_to_ref.py <<'PY'
-          import json, math
+          import json
           import mido
 
           VIDEO_ID='2stwr_olRDw'
@@ -73,7 +118,6 @@ jobs:
           mid=mido.MidiFile('goodday.mid')
           tpb=mid.ticks_per_beat
 
-          # Build a global tempo map from all tracks.
           tempo_events=[(0,500000)]
           for tr in mid.tracks:
               tick=0
@@ -102,77 +146,85 @@ jobs:
               st,ss,tp=seg[idx]
               return ss+(tick-st)*tp/1_000_000/tpb
 
-          candidates=[]
+          tracks=[]
           for ti,tr in enumerate(mid.tracks):
               tick=0; active={}; notes=[]
               for msg in tr:
                   tick += msg.time
                   if msg.type=='note_on' and msg.velocity>0:
-                      active.setdefault((msg.channel,msg.note),[]).append((tick,msg.velocity))
-                  elif msg.type in ('note_off','note_on') and (msg.type=='note_off' or msg.velocity==0):
-                      k=(msg.channel,msg.note)
+                      active.setdefault((getattr(msg,'channel',0),msg.note),[]).append((tick,msg.velocity))
+                  elif msg.type in ('note_off','note_on') and (msg.type=='note_off' or getattr(msg,'velocity',0)==0):
+                      k=(getattr(msg,'channel',0),msg.note)
                       if k in active and active[k]:
                           st,vel=active[k].pop(0)
                           if tick>st:
-                              notes.append({'start':tick_to_sec(st),'end':tick_to_sec(tick),'pitch':msg.note,'vel':vel})
-              if len(notes)<20: continue
-              pitches=[n['pitch'] for n in notes]
-              mean=sum(pitches)/len(pitches)
-              hi_ratio=sum(1 for p in pitches if p>=60)/len(pitches)
-              # Vocal/lead is normally the higher of the two piano staves.
-              score=mean + hi_ratio*22 + min(8,len(notes)/120)
-              candidates.append((score,ti,notes,mean,hi_ratio))
+                              notes.append({'start':tick_to_sec(st),'end':tick_to_sec(tick),'pitch':int(msg.note),'vel':int(vel)})
+              if notes:
+                  pitches=[n['pitch'] for n in notes]
+                  tracks.append({'index':ti,'notes':notes,'mean':sum(pitches)/len(pitches),'count':len(notes),'high':sum(p>=60 for p in pitches)/len(pitches)})
 
-          if not candidates: raise SystemExit('No usable note tracks')
-          candidates.sort(reverse=True,key=lambda x:x[0])
-          score,ti,notes,mean,hi_ratio=candidates[0]
-          print('chosen track',ti,'notes',len(notes),'mean',mean,'hi_ratio',hi_ratio)
+          if not tracks: raise SystemExit('No note tracks')
+          print('tracks',[(x['index'],x['count'],round(x['mean'],1),round(x['high'],2)) for x in tracks])
 
-          # Collapse simultaneous piano chords to their highest note, which is the lead line
-          # for this public piano transcription.
+          # MidiShow 159079 documents Track 1 as the upper piano staff (G#3-D6),
+          # while Track 2 is the low accompaniment. Prefer track 1; otherwise choose
+          # the highest dense track.
+          chosen=next((x for x in tracks if x['index']==1 and x['count']>=100),None)
+          if chosen is None:
+              chosen=max(tracks,key=lambda x:(x['mean']+x['high']*18+min(8,x['count']/120)))
+          notes=chosen['notes']
+          print('chosen track',chosen['index'],'raw notes',len(notes),'mean',chosen['mean'])
+
           notes.sort(key=lambda n:(n['start'],-n['pitch']))
           groups=[]
           for n in notes:
               if not groups or abs(n['start']-groups[-1][0]['start'])>0.035:
                   groups.append([n])
-              else: groups[-1].append(n)
+              else:
+                  groups[-1].append(n)
+
+          # For piano-score chords, use the highest note as the singable guide line.
           lead=[]
           for g in groups:
               n=max(g,key=lambda x:x['pitch'])
-              if n['end']-n['start'] < 0.045: continue
-              lead.append({'start':n['start'],'end':n['end'],'pitch':int(n['pitch'])})
+              if n['end']-n['start']>=0.045:
+                  lead.append({'start':n['start'],'end':n['end'],'pitch':n['pitch']})
 
-          # Merge repeated adjacent notes.
           merged=[]
           for n in lead:
-              if merged and merged[-1]['pitch']==n['pitch'] and n['start']-merged[-1]['end']<0.08:
+              if merged and merged[-1]['pitch']==n['pitch'] and n['start']-merged[-1]['end']<0.085:
                   merged[-1]['end']=max(merged[-1]['end'],n['end'])
-              else: merged.append(n.copy())
+              else:
+                  merged.append(dict(n))
 
-          midi_duration=max((n['end'] for n in merged),default=1.0)
-          # Keep the score's relative timing but gently fit it to the selected 3:56 video.
-          scale=VIDEO_DURATION/midi_duration if 0.92 <= VIDEO_DURATION/midi_duration <= 1.10 else 1.0
+          score_duration=max((n['end'] for n in merged),default=1.0)
+          ratio=VIDEO_DURATION/score_duration
+          # The score is ~3:50 and selected video ~3:56, so a small global fit is expected.
+          scale=ratio if 0.90<=ratio<=1.12 else 1.0
           for n in merged:
               n['start']=round(n['start']*scale,3)
               n['end']=round(n['end']*scale,3)
+              n['pitch']=int(n['pitch'])
+
+          if len(merged)<100:
+              raise SystemExit('Too few reference notes: %d'%len(merged))
 
           out={
-              'version':2,
+              'version':3,
               'videoId':VIDEO_ID,
-              'source':'Midiex public MIDI 161412; author allows redistribution with attribution and modification',
-              'sourceUrl':'https://midiex.net/midi/161412',
-              'track':ti,
-              'duration':round(midi_duration*scale,3),
+              'source':'MidiShow 159079 IU - Good Day piano score, upper staff used as guide melody',
+              'sourceUrl':'https://www.midishow.com/en/midi/iu-good-day-midi-download-159079',
+              'track':chosen['index'],
+              'scoreDuration':round(score_duration,3),
               'videoDuration':VIDEO_DURATION,
               'scale':round(scale,8),
               'offset':0.0,
               'noteCount':len(merged),
               'notes':merged
           }
-          if len(merged)<80: raise SystemExit('Too few reference notes: %d'%len(merged))
           with open('good-day-2stwr_olRDw.json','w',encoding='utf-8') as f:
               json.dump(out,f,ensure_ascii=False,separators=(',',':'))
-          print('reference notes',len(merged),'duration',out['duration'],'scale',scale)
+          print('REFERENCE OK notes',len(merged),'scoreDuration',out['scoreDuration'],'scale',scale)
           PY
           python /tmp/midi_to_ref.py
 
@@ -182,6 +234,6 @@ jobs:
           git config user.email 'actions@users.noreply.github.com'
           git add good-day-2stwr_olRDw.json
           git diff --cached --quiet && exit 0
-          git commit -m 'Generate Good Day target-note reference'
+          git commit -m 'Generate Good Day fixed pitch reference'
           git pull --rebase origin main
           git push
