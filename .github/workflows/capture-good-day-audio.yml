@@ -1,0 +1,187 @@
+name: Capture Good Day Audio
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/capture-good-day-audio.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install capture and analysis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          python -m pip install playwright numpy scipy librosa soundfile
+          python -m playwright install --with-deps chromium
+
+      - name: Capture audio stream URL from YouTube embed
+        run: |
+          cat > /tmp/capture.py <<'PY'
+          import os, json, time, urllib.parse
+          from playwright.sync_api import sync_playwright
+
+          VIDEO='2stwr_olRDw'
+          EMBED=f'https://www.youtube.com/embed/{VIDEO}?autoplay=1&mute=1&playsinline=1&controls=1'
+          media=[]
+          player_json=[]
+
+          with sync_playwright() as p:
+              browser=p.chromium.launch(headless=True,args=['--autoplay-policy=no-user-gesture-required'])
+              ctx=browser.new_context(locale='ko-KR',viewport={'width':1280,'height':720},user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36')
+              page=ctx.new_page()
+
+              def on_request(req):
+                  u=req.url
+                  if 'googlevideo.com/videoplayback' in u:
+                      if u not in media:
+                          media.append(u)
+                          q=urllib.parse.parse_qs(urllib.parse.urlsplit(u).query)
+                          print('MEDIA',q.get('itag',['?'])[0],urllib.parse.unquote(q.get('mime',[''])[0]),q.get('range',[''])[0],u[:240])
+              page.on('request',on_request)
+
+              def on_response(resp):
+                  try:
+                      if '/youtubei/v1/player' in resp.url and resp.status==200:
+                          d=resp.json()
+                          player_json.append(d)
+                          sd=d.get('streamingData') or {}
+                          for f in sd.get('adaptiveFormats') or []:
+                              print('PLAYERFMT',f.get('itag'),f.get('mimeType'),bool(f.get('url')),bool(f.get('signatureCipher')))
+                  except Exception as e:
+                      print('player response parse',repr(e))
+              page.on('response',on_response)
+
+              print('OPEN',EMBED)
+              page.goto(EMBED,wait_until='domcontentloaded',timeout=60000)
+              page.wait_for_timeout(12000)
+              # Force a play gesture if autoplay did not start.
+              try:
+                  page.locator('.ytp-large-play-button').click(timeout=3000)
+                  page.wait_for_timeout(8000)
+              except Exception as e:
+                  print('play click',repr(e))
+
+              # Prefer a clean direct audio URL from player response.
+              candidates=[]
+              for d in player_json:
+                  for f in ((d.get('streamingData') or {}).get('adaptiveFormats') or []):
+                      mt=str(f.get('mimeType') or '')
+                      u=f.get('url')
+                      if u and mt.startswith('audio/'):
+                          candidates.append((int(f.get('bitrate') or 0),u,mt,int(f.get('itag') or 0)))
+              candidates.sort(reverse=True,key=lambda x:x[0])
+              chosen=candidates[0] if candidates else None
+
+              # Otherwise use the actual media request made by Chromium and remove segment-only range.
+              if not chosen:
+                  for u in media:
+                      parts=urllib.parse.urlsplit(u)
+                      q=urllib.parse.parse_qs(parts.query,keep_blank_values=True)
+                      mime=urllib.parse.unquote(q.get('mime',[''])[0])
+                      itag=int(q.get('itag',['0'])[0] or 0)
+                      if mime.startswith('audio/') or itag in (139,140,249,250,251,599,600):
+                          pairs=urllib.parse.parse_qsl(parts.query,keep_blank_values=True)
+                          pairs=[(k,v) for k,v in pairs if k not in ('range','rn','rbuf')]
+                          clean=urllib.parse.urlunsplit((parts.scheme,parts.netloc,parts.path,urllib.parse.urlencode(pairs),parts.fragment))
+                          chosen=(0,clean,mime,itag)
+                          break
+
+              if not chosen:
+                  print('NO AUDIO URL. media count=',len(media),'player responses=',len(player_json))
+                  raise SystemExit('No YouTube audio stream captured')
+
+              print('CHOSEN',chosen[3],chosen[2],chosen[1][:300])
+              r=ctx.request.get(chosen[1],headers={'Referer':'https://www.youtube.com/'},timeout=120000,fail_on_status_code=False)
+              data=r.body()
+              ctype=r.headers.get('content-type','')
+              print('AUDIO RESPONSE',r.status,ctype,len(data),repr(data[:24]))
+              if r.status not in (200,206) or len(data)<100000:
+                  raise SystemExit('Captured audio response unusable')
+              open('goodday-source-audio.bin','wb').write(data)
+              open('capture-meta.json','w').write(json.dumps({'videoId':VIDEO,'itag':chosen[3],'mime':chosen[2],'bytes':len(data),'contentType':ctype},indent=2))
+              browser.close()
+          PY
+          python /tmp/capture.py
+
+      - name: Decode captured audio
+        run: |
+          ffmpeg -y -i goodday-source-audio.bin -vn -ac 1 -ar 22050 goodday.wav
+          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 goodday.wav
+
+      - name: Extract target pitch timeline from upper melodic energy
+        run: |
+          cat > /tmp/analyze.py <<'PY'
+          import json, math
+          import numpy as np
+          import librosa
+          from scipy.signal import butter, sosfiltfilt
+
+          VIDEO='2stwr_olRDw'
+          y,sr=librosa.load('goodday.wav',sr=22050,mono=True)
+          # Suppress bass/accompaniment below the singer range, then emphasize harmonic content.
+          sos=butter(5,[170,1800],btype='bandpass',fs=sr,output='sos')
+          yf=sosfiltfilt(sos,y).astype(np.float32)
+          yh=librosa.effects.harmonic(yf,margin=2.5)
+          hop=256
+          f0,voiced,prob=librosa.pyin(yh,fmin=librosa.note_to_hz('A3'),fmax=librosa.note_to_hz('G6'),sr=sr,frame_length=2048,hop_length=hop,fill_na=np.nan)
+          times=librosa.frames_to_time(np.arange(len(f0)),sr=sr,hop_length=hop)
+          rms=librosa.feature.rms(y=yf,frame_length=2048,hop_length=hop)[0]
+          thr=max(float(np.percentile(rms,30)),0.003)
+          vals=[]
+          for t,h,v,p,r in zip(times,f0,voiced,prob,rms):
+              if not np.isfinite(h) or not bool(v) or float(p or 0)<0.55 or float(r)<thr:
+                  vals.append((float(t),None));continue
+              m=int(round(float(librosa.hz_to_midi(h))))
+              vals.append((float(t),m if 56<=m<=91 else None))
+          sm=[]
+          raw=[x[1] for x in vals]
+          for i,m in enumerate(raw):
+              q=[v for v in raw[max(0,i-3):min(len(raw),i+4)] if v is not None]
+              sm.append(int(round(float(np.median(q)))) if q else None)
+          dt=hop/sr; notes=[];cur=None
+          for i,m in enumerate(sm):
+              t=vals[i][0]
+              if m is None:
+                  if cur and cur['end']-cur['start']>=.12: notes.append(cur)
+                  cur=None;continue
+              if cur is None: cur={'start':t,'end':t+dt,'pitch':m,'n':1};continue
+              if abs(m-cur['pitch'])<=1 and t-cur['end']<.13:
+                  cur['pitch']=int(round((cur['pitch']*cur['n']+m)/(cur['n']+1)));cur['n']+=1;cur['end']=t+dt
+              else:
+                  if cur['end']-cur['start']>=.12: notes.append(cur)
+                  cur={'start':t,'end':t+dt,'pitch':m,'n':1}
+          if cur and cur['end']-cur['start']>=.12: notes.append(cur)
+          out=[]
+          for n in notes:
+              q={'start':round(float(n['start']),3),'end':round(float(n['end']),3),'pitch':int(n['pitch'])}
+              if out and out[-1]['pitch']==q['pitch'] and q['start']-out[-1]['end']<.13: out[-1]['end']=q['end']
+              else: out.append(q)
+          duration=round(len(y)/sr,3)
+          print('duration',duration,'notes',len(out),'range',min([n['pitch'] for n in out],default=0),max([n['pitch'] for n in out],default=0))
+          if len(out)<80: raise SystemExit('Too few target notes extracted')
+          data={'version':6,'videoId':VIDEO,'source':'YouTube embed audio captured by Chromium + bandpassed pYIN guide extraction','duration':duration,'offset':0.0,'noteCount':len(out),'notes':out}
+          with open('good-day-2stwr_olRDw.json','w',encoding='utf-8') as f: json.dump(data,f,ensure_ascii=False,separators=(',',':'))
+          PY
+          python /tmp/analyze.py
+
+      - name: Commit generated reference only
+        run: |
+          rm -f goodday-source-audio.bin goodday.wav capture-meta.json
+          git config user.name 'tori-voice-stage-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add good-day-2stwr_olRDw.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Generate Good Day pitch reference from playable YouTube audio'
+          git pull --rebase origin main
+          git push
