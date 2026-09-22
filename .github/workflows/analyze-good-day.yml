@@ -23,10 +23,10 @@ jobs:
           python -m pip install playwright mido
           python -m playwright install --with-deps chromium
 
-      - name: Download Good Day MIDI in real browser session
+      - name: Download Good Day MIDI in browser session
         run: |
           cat > /tmp/download_midi.py <<'PY'
-          import os, re, urllib.parse
+          import os, urllib.parse
           from playwright.sync_api import sync_playwright
 
           PAGE='https://midiex.net/midi/161412'
@@ -40,55 +40,43 @@ jobs:
                   user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36'
               )
               page=context.new_page()
-              page.goto(PAGE, wait_until='domcontentloaded', timeout=60000)
+              page.goto(PAGE,wait_until='networkidle',timeout=60000)
               print('title=',page.title())
-              links=page.locator('a').all()
-              cand=[]
-              for a in links:
-                  try:
-                      txt=(a.inner_text(timeout=1000) or '').strip()
-                      href=a.get_attribute('href') or ''
-                      if '.mid' in txt.lower() or 'download.php' in href.lower():
-                          cand.append((txt,href))
-                  except Exception:
-                      pass
-              print('download candidates=',cand[:20])
-              target=None
-              for txt,href in cand:
-                  if '.mid' in txt.lower() or 'download.php' in href.lower():
-                      target=page.locator('a', has_text='.mid').first if '.mid' in txt.lower() else None
-                      if target and target.count():
-                          break
-              if not target or not target.count():
-                  target=page.locator('a[href*="download.php"]').first
-              if not target.count():
+              link=page.locator('a[href*="download.php"]').first
+              if not link.count():
                   raise RuntimeError('download link not found')
-              print('click href=',target.get_attribute('href'))
-              try:
-                  with page.expect_download(timeout=45000) as info:
-                      target.click()
-                  dl=info.value
-                  print('suggested=',dl.suggested_filename)
-                  dl.save_as(OUT)
-              except Exception as e:
-                  print('download event failed=',repr(e))
-                  href=target.get_attribute('href') or ''
-                  if not href:
-                      raise
-                  u=urllib.parse.urljoin(PAGE,href)
-                  # Use the same browser context cookies/headers for the attachment request.
-                  resp=context.request.get(u,headers={'Referer':PAGE},timeout=45000)
+              href=link.get_attribute('href') or ''
+              href=urllib.parse.urljoin(PAGE,href)
+              print('attachment=',href)
+
+              # This request shares the live Chromium cookie jar and the fresh nonce
+              # generated for this exact page load.
+              resp=context.request.get(href,headers={
+                  'Referer':PAGE,
+                  'Accept':'audio/midi,audio/x-midi,application/octet-stream,*/*;q=0.8'
+              },timeout=45000,fail_on_status_code=False)
+              data=resp.body()
+              print('attachment response=',resp.status,resp.url,resp.headers.get('content-type'),len(data),repr(data[:32]))
+
+              if data[:4] != b'MThd':
+                  # Some Gnuboard installations start the real download only after a click.
+                  # Click once, then request the SAME saved nonce URL again with cookies.
+                  try:
+                      page.goto(PAGE,wait_until='domcontentloaded',timeout=30000)
+                      page.locator('a[href*="download.php"]').first.click(timeout=10000,no_wait_after=True)
+                      page.wait_for_timeout(1200)
+                  except Exception as e:
+                      print('click assist=',repr(e))
+                  resp=context.request.get(href,headers={'Referer':PAGE},timeout=45000,fail_on_status_code=False)
                   data=resp.body()
-                  print('request fallback=',resp.status,resp.url,resp.headers.get('content-type'),len(data),repr(data[:32]))
-                  open(OUT,'wb').write(data)
+                  print('second response=',resp.status,resp.url,resp.headers.get('content-type'),len(data),repr(data[:32]))
               browser.close()
 
-          data=open(OUT,'rb').read()
-          print('saved=',len(data),repr(data[:32]))
           if data[:4] != b'MThd':
-              # Expose useful HTML error text in logs without storing it.
-              print(data[:1200].decode('utf-8','ignore'))
+              print(data[:1600].decode('utf-8','ignore'))
               raise SystemExit('Downloaded payload is not MIDI')
+          open(OUT,'wb').write(data)
+          print('MIDI OK=',len(data),'bytes')
           PY
           python /tmp/download_midi.py
 
@@ -181,7 +169,7 @@ jobs:
 
           if len(merged)<20: raise SystemExit('Too few reference notes: %d'%len(merged))
           out={
-              'version':4,
+              'version':5,
               'videoId':VIDEO_ID,
               'source':'Midiex 161412 self-made Good Day MIDI; attribution required; modification allowed',
               'sourceUrl':'https://midiex.net/midi/161412',
