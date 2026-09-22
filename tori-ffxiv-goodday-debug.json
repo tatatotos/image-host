@@ -1,0 +1,59 @@
+{
+  "ok": true,
+  "profileStatus": 200,
+  "profileLength": 15461095,
+  "matches": [
+    {
+      "url": "https://ffxivbard.com/song/7570",
+      "text": "=\"/song/7571\"> View song Missing You (ft. JAURIM) G-Dragon Published 17 0.00 0 Sep 9, 2026 10:50 View song Good Day IU <span class=\"profi"
+    },
+    {
+      "url": "https://ffxivbard.com/song/7569",
+      "text": "=\"/song/7570\"> View song Good Day IU Published 23 0.00 0 Sep 9, 2026 10:50 View song Like It Jong Shin Yoon <span class=\"profile-chip pro"
+    }
+  ],
+  "pages": [
+    {
+      "songUrl": "https://ffxivbard.com/song/7570",
+      "status": 200,
+      "length": 23301,
+      "titleMatch": false,
+      "downloads": [
+        {
+          "url": "https://ffxivbard.com/auth/login",
+          "text": "ex-col gap-3 rounded-xl border border-slate-800/60 bg-slate-950/50 p-4 text-sm text-slate-300\"> Log in to rate and leave your feedback. Login with Discord <button type=\"button\" onclick=\"location.href='/song/download/7570?disposition=attachment';\" class=\"inline-flex items-center justify-cente"
+        },
+        {
+          "url": "https://ffxivbard.com/song/download/7570?disposition=attachment",
+          "text": "Download MIDI <i class=\"fa fa-pencil\" aria-hidden=\"t"
+        },
+        {
+          "url": "https://ffxivbard.com/song/7570/edit",
+          "text": "te transition hover:bg-amber-300\"> Download MIDI Suggest Edits Insights <li class=\"flex flex-"
+        }
+      ],
+      "snippet": "FFXIV-Bard Bard Guild Final Fantasy XIV Song Library Home Songbook Upload midi Login Arrangement Missing You (ft. JAURIM) G-Dragon • Uploaded by Anonymous Crafter A'two Korea Ensemble Size Trio Genres Pop Instruments Harp Source N/A Notes Solo / Harp / 'All tracks' ON, 'Hold Notes & Sim Chords' OFF Source: https://www.youtube.com/watch?v=RGjZl_0A2gQ Community Rating 0.0 ★ ★ ★ ★ ★ 0 comments logged Log in to rate and leave your feedback. Login with Discord Download MIDI Suggest Edits Insights Ensemble Trio 0 comments logged Playback Live preview 0:00 / --:-- Press play to stream the live MIDI preview. Your browser may not support in-browser MIDI playback. Download the MIDI file instead . Comments Share performance notes, ensemble tips, or improvements. No comments yet. Start the conversation below. Add a comment Submit Comment FFXIV Bard — MIDI song library."
+    },
+    {
+      "songUrl": "https://ffxivbard.com/song/7569",
+      "status": 200,
+      "length": 23279,
+      "titleMatch": true,
+      "downloads": [
+        {
+          "url": "https://ffxivbard.com/auth/login",
+          "text": "ex-col gap-3 rounded-xl border border-slate-800/60 bg-slate-950/50 p-4 text-sm text-slate-300\"> Log in to rate and leave your feedback. Login with Discord <button type=\"button\" onclick=\"location.href='/song/download/7569?disposition=attachment';\" class=\"inline-flex items-center justify-cente"
+        },
+        {
+          "url": "https://ffxivbard.com/song/download/7569?disposition=attachment",
+          "text": "Download MIDI <i class=\"fa fa-pencil\" aria-hidden=\"t"
+        },
+        {
+          "url": "https://ffxivbard.com/song/7569/edit",
+          "text": "te transition hover:bg-amber-300\"> Download MIDI Suggest Edits Insights <li class=\"flex flex-"
+        }
+      ],
+      "snippet": "FFXIV-Bard Bard Guild Final Fantasy XIV Song Library Home Songbook Upload midi Login Arrangement Good Day IU • Uploaded by Anonymous Crafter A'two Korea Ensemble Size Trio Genres Pop Instruments Harp Source N/A Notes Solo / Harp / 'All tracks' ON, 'Hold Notes & Sim Chords' OFF Source: https://www.youtube.com/watch?v=OIHlzvEKncQ Community Rating 0.0 ★ ★ ★ ★ ★ 0 comments logged Log in to rate and leave your feedback. Login with Discord Download MIDI Suggest Edits Insights Ensemble Trio 0 comments logged Playback Live preview 0:00 / --:-- Press play to stream the live MIDI preview. Your browser may not support in-browser MIDI playback. Download the MIDI file instead . Comments Share performance notes, ensemble tips, or improvements. No comments yet. Start the conversation below. Add a comment Submit Comment FFXIV Bard — MIDI song library."
+    }
+  ]
+}
