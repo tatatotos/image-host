@@ -1,20 +1,86 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"><title>TORI VOICE STAGE</title><style>html,body{margin:0;background:#020913;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Noto Sans KR",sans-serif}body{min-height:100vh}.wrap{max-width:900px;margin:auto;padding:18px}.title{font-size:34px;font-weight:1000;letter-spacing:-1px}.sub{color:#8bbbd4;margin:6px 0 16px}.songs{display:flex;gap:8px;overflow:auto;padding-bottom:8px}.song{white-space:nowrap;border:1px solid #214b66;background:#0a2031;color:#dff8ff;border-radius:999px;padding:10px 14px;font-weight:800}.song.active{background:#58efff;color:#03131d}.player{position:relative;padding-top:56.25%;margin-top:10px;border-radius:18px;overflow:hidden;background:#000}.player iframe{position:absolute;inset:0;width:100%;height:100%;border:0}.panel{margin-top:12px;padding:14px;border:1px solid #163f58;border-radius:16px;background:#061724}.row{display:flex;justify-content:space-between;gap:10px;align-items:center}.big{font-size:30px;font-weight:1000;color:#59efff}.muted{color:#86a8be;font-size:12px}.meter{height:12px;background:#0b2a3d;border-radius:999px;overflow:hidden;margin:10px 0}.meter>i{display:block;height:100%;width:0;background:#59efff}.score{font-size:28px;font-weight:1000}.btn{width:100%;border:0;border-radius:14px;padding:14px;background:#59efff;color:#02131d;font-weight:1000;font-size:17px;margin-top:12px}.hint{font-size:12px;color:#9ec7dc;line-height:1.5;margin-top:8px}.warn{color:#ffd36a}.chart{height:180px;width:100%;background:#020b13;border-radius:14px;margin-top:12px;display:block}.badge{display:inline-block;padding:5px 9px;border-radius:999px;background:#10324a;color:#aeeeff;font-size:11px;font-weight:800}.footer{font-size:11px;color:#5f8298;margin:14px 0 30px;line-height:1.5}</style></head><body><div class="wrap"><div class="title">TORI VOICE STAGE</div><div class="sub">유튜브 노래방 반주 + 실시간 보컬 분석 샘플</div><div class="songs" id="songs"></div><div class="player"><iframe id="yt" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe></div><div class="panel"><div class="row"><div><span class="badge" id="status">마이크 대기</span><div class="big" id="note">--</div><div class="muted" id="hz">0 Hz</div></div><div style="text-align:right"><div class="muted">LIVE SCORE</div><div class="score" id="score">0</div><div class="muted" id="detail">안정도 0 · 음역 0</div></div></div><div class="meter"><i id="level"></i></div><canvas class="chart" id="cv"></canvas><button class="btn" id="mic">🎤 마이크 분석 시작</button><div class="hint"><span class="warn">현재 샘플:</span> 유튜브 반주와 함께 부르면 실시간 음정, 입력 레벨, 음정 안정도와 음역을 분석합니다. 아직 원곡 멜로디와 1:1 비교하는 정밀 채점은 아닙니다.</div></div><div class="footer">반주는 각 제공자의 YouTube 영상으로 재생됩니다. 아이폰에서는 Safari에서 열고 마이크 권한을 허용해 주세요.</div></div><script>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#020913">
+<title>TORI VOICE STAGE</title>
+<style>
+:root{--bg:#020913;--panel:#061724;--panel2:#0a2031;--cyan:#59efff;--text:#fff;--muted:#86a8be;--line:#163f58;--yellow:#ffd36a;--green:#8df0bf}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Noto Sans KR",sans-serif}
+body{min-height:100vh}.wrap{max-width:900px;margin:auto;padding:18px;padding-bottom:max(34px,env(safe-area-inset-bottom))}
+.title{font-size:34px;font-weight:1000;letter-spacing:-1.5px}.sub{color:#8bbbd4;margin:6px 0 16px;font-size:14px}
+.songs{display:flex;gap:8px;overflow:auto;padding-bottom:9px;scrollbar-width:none}.songs::-webkit-scrollbar{display:none}
+.song{white-space:nowrap;border:1px solid #214b66;background:#0a2031;color:#dff8ff;border-radius:999px;padding:10px 14px;font-weight:850;font-size:13px}.song.active{background:var(--cyan);color:#03131d;border-color:var(--cyan)}
+.now{display:flex;justify-content:space-between;align-items:end;gap:10px;margin:5px 2px 9px}.now b{font-size:18px}.now span{font-size:12px;color:var(--muted)}
+.player{position:relative;padding-top:56.25%;border-radius:18px;overflow:hidden;background:#000}.player>div{position:absolute;inset:0}.player iframe{width:100%;height:100%}
+.timeline{margin:10px 0 0}.time-row{display:flex;justify-content:space-between;color:#a9cada;font-size:11px;margin-bottom:6px}.progress{height:9px;border-radius:999px;background:#0b2a3d;overflow:hidden}.progress i{display:block;height:100%;width:0;background:linear-gradient(90deg,#59efff,#9bf7ff);transition:width .2s linear}
+.panel{margin-top:12px;padding:14px;border:1px solid var(--line);border-radius:18px;background:var(--panel)}.row{display:flex;justify-content:space-between;gap:10px;align-items:center}
+.big{font-size:31px;font-weight:1000;color:var(--cyan)}.muted{color:var(--muted);font-size:12px}.score{font-size:30px;font-weight:1000}.badge{display:inline-block;padding:5px 9px;border-radius:999px;background:#10324a;color:#aeeeff;font-size:11px;font-weight:850}
+.meter{height:12px;background:#0b2a3d;border-radius:999px;overflow:hidden;margin:10px 0}.meter>i{display:block;height:100%;width:0;background:var(--cyan)}
+.chart{height:190px;width:100%;background:#020b13;border-radius:14px;margin-top:12px;display:block}
+.buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:11px}.btn{border:0;border-radius:14px;padding:14px;background:var(--cyan);color:#02131d;font-weight:1000;font-size:16px}.btn.alt{background:#123149;color:#e9f9ff;border:1px solid #214c68}.btn:disabled{opacity:.45}
+.hint{font-size:12px;color:#9ec7dc;line-height:1.55;margin-top:10px}.warn{color:var(--yellow)}.ok{color:var(--green)}
+.result{display:none;position:fixed;inset:0;z-index:50;background:rgba(0,7,13,.91);backdrop-filter:blur(10px);align-items:center;justify-content:center;padding:18px}.result.show{display:flex}.card{width:min(520px,100%);padding:24px;border:1px solid #1d4c68;border-radius:24px;background:#071b2a;text-align:center}.card h2{margin:4px 0 3px;font-size:27px}.final{font-size:60px;font-weight:1000;color:var(--cyan);line-height:1.1;margin:10px 0}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0}.g{background:#0b263a;border-radius:13px;padding:12px 4px}.g b{display:block;font-size:22px}.g span{font-size:10px;color:var(--muted)}.footer{font-size:11px;color:#5f8298;margin:14px 0;line-height:1.5}
+@media(max-width:520px){.wrap{padding:14px}.title{font-size:31px}.buttons{grid-template-columns:1fr}.chart{height:165px}.player{border-radius:14px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="title">TORI VOICE STAGE</div>
+  <div class="sub">유튜브 노래방 반주 전체 길이 + 실시간 보컬 분석</div>
+  <div class="songs" id="songs"></div>
+  <div class="now"><div><b id="songTitle">-</b><br><span id="songMode">전체곡 채점</span></div><span id="durationLabel">길이 확인 중</span></div>
+  <div class="player"><div id="yt"></div></div>
+  <div class="timeline"><div class="time-row"><span id="timeNow">0:00</span><span id="timeTotal">0:00</span></div><div class="progress"><i id="progress"></i></div></div>
+
+  <div class="panel">
+    <div class="row">
+      <div><span class="badge" id="status">마이크 대기</span><div class="big" id="note">--</div><div class="muted" id="hz">0 Hz</div></div>
+      <div style="text-align:right"><div class="muted">LIVE SCORE</div><div class="score" id="score">0</div><div class="muted" id="detail">안정도 0 · 음역 0</div></div>
+    </div>
+    <div class="meter"><i id="level"></i></div>
+    <canvas class="chart" id="cv"></canvas>
+    <div class="buttons"><button class="btn" id="mic">🎤 마이크 연결</button><button class="btn alt" id="startBtn" disabled>▶ 전체곡 처음부터 시작</button></div>
+    <div class="hint"><span class="ok">전체곡 모드:</span> 선택한 유튜브 반주가 재생되는 동안만 분석값을 누적합니다. 일시정지하면 채점도 멈추고, 영상이 끝나면 최종 결과를 표시합니다. 곡을 바꾸면 점수는 새로 시작합니다.<br><span class="warn">참고:</span> 현재는 목소리의 음정 검출·발성 지속·안정도·음역을 평가하는 샘플이며, 원곡 멜로디와 음 하나하나를 대조하는 정밀 음정 채점은 아직 적용 전입니다.</div>
+  </div>
+  <div class="footer">반주는 각 제공자의 YouTube 임베드 영상으로 재생됩니다. iPhone에서는 Safari에서 열고 마이크 권한을 허용해 주세요.</div>
+</div>
+
+<div class="result" id="result"><div class="card"><div style="font-size:48px">🐱🎤</div><h2 id="resultTitle">곡 완료</h2><div class="muted">FINAL SCORE</div><div class="final" id="finalScore">0</div><div class="grid"><div class="g"><b id="rStability">0</b><span>안정도</span></div><div class="g"><b id="rRange">0</b><span>음역(semitone)</span></div><div class="g"><b id="rVoice">0%</b><span>발성 검출률</span></div></div><button class="btn" id="again">같은 곡 다시 하기</button><button class="btn alt" style="margin-top:8px;width:100%" id="closeResult">곡 선택으로 돌아가기</button></div></div>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
 const songs=[
  {t:'아이유 - 좋은 날',id:'NbmtT4n2hyk'},
  {t:'아이유 - 너랑 나',id:'A5-tvme6Bn8'},
  {t:'아이유 메들리',id:'b7sDVTIC5m0'}
 ];
-let current=0;const songsEl=document.getElementById('songs'),yt=document.getElementById('yt');
-function loadSong(i){current=i;yt.src='https://www.youtube.com/embed/'+songs[i].id+'?playsinline=1&rel=0';[...songsEl.children].forEach((b,n)=>b.classList.toggle('active',n===i))}
-songs.forEach((s,i)=>{const b=document.createElement('button');b.className='song';b.textContent=s.t;b.onclick=()=>loadSong(i);songsEl.appendChild(b)});loadSong(0);
-let ac,an,buf,history=[],voiced=0,total=0,minM=999,maxM=-999,stabilitySum=0,lastM=null;
-const noteEl=document.getElementById('note'),hzEl=document.getElementById('hz'),levelEl=document.getElementById('level'),scoreEl=document.getElementById('score'),detailEl=document.getElementById('detail'),statusEl=document.getElementById('status'),cv=document.getElementById('cv'),ctx=cv.getContext('2d');
-const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];const hz2m=f=>69+12*Math.log2(f/440);const name=m=>names[((m%12)+12)%12]+(Math.floor(m/12)-1);
+let current=0,player=null,playerReady=false,micReady=false,analysisRunning=false,raf=0,progressTimer=0;
+let ac=null,an=null,buf=null,mediaStream=null,history=[];
+let voiced=0,total=0,minM=999,maxM=-999,stabilitySum=0,lastM=null,finalValue=0;
+const $=id=>document.getElementById(id);
+const songsEl=$('songs'),noteEl=$('note'),hzEl=$('hz'),levelEl=$('level'),scoreEl=$('score'),detailEl=$('detail'),statusEl=$('status'),cv=$('cv'),ctx=cv.getContext('2d');
+const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const hz2m=f=>69+12*Math.log2(f/440);const name=m=>names[((m%12)+12)%12]+(Math.floor(m/12)-1);
+function fmt(sec){sec=Math.max(0,Math.floor(Number(sec)||0));return Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0')}
 function fit(){const r=cv.getBoundingClientRect(),d=Math.min(2,devicePixelRatio||1);cv.width=r.width*d;cv.height=r.height*d;ctx.setTransform(d,0,0,d,0,0)}addEventListener('resize',fit);fit();
-function pitch(a,sr){let n=a.length,rms=0;for(let i=0;i<n;i++)rms+=a[i]*a[i];rms=Math.sqrt(rms/n);if(rms<.01)return[-1,rms];let best=0,lag0=-1,min=Math.floor(sr/900),max=Math.min(Math.floor(sr/70),n-2);for(let lag=min;lag<=max;lag+=2){let c=0;for(let i=0;i<n-lag;i+=2)c+=a[i]*a[i+lag];if(c>best){best=c;lag0=lag}}if(lag0<0)return[-1,rms];let f=sr/lag0;return[(f>=70&&f<=900)?f:-1,rms]}
-function draw(){let w=cv.clientWidth,h=cv.clientHeight;ctx.clearRect(0,0,w,h);ctx.strokeStyle='rgba(100,220,255,.12)';for(let y=20;y<h;y+=32){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}if(history.length<2)return;let vals=history.filter(x=>x>0);if(!vals.length)return;let lo=Math.min(...vals)-2,hi=Math.max(...vals)+2;ctx.strokeStyle='#59efff';ctx.lineWidth=3;ctx.beginPath();history.forEach((m,i)=>{if(m<=0)return;let x=i/(history.length-1)*w,y=h-(m-lo)/(hi-lo)*h;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)});ctx.stroke()}
-async function startMic(){try{const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});ac=new (AudioContext||webkitAudioContext)();await ac.resume();an=ac.createAnalyser();an.fftSize=2048;ac.createMediaStreamSource(stream).connect(an);buf=new Float32Array(an.fftSize);statusEl.textContent='마이크 연결됨';loop()}catch(e){statusEl.textContent='마이크 실패';alert('Safari에서 마이크 권한을 허용해 주세요.')}}
-function loop(){an.getFloatTimeDomainData(buf);let [f,rms]=pitch(buf,ac.sampleRate);levelEl.style.width=Math.min(100,rms*700)+'%';total++;if(f>0){voiced++;let m=hz2m(f);noteEl.textContent=name(Math.round(m));hzEl.textContent=f.toFixed(1)+' Hz';minM=Math.min(minM,m);maxM=Math.max(maxM,m);if(lastM!==null)stabilitySum+=Math.max(0,100-Math.abs(m-lastM)*28);lastM=m;history.push(m)}else{noteEl.textContent='--';hzEl.textContent='0 Hz';history.push(-1)}if(history.length>160)history.shift();let coverage=total?voiced/total*100:0,stability=voiced>1?stabilitySum/(voiced-1):0,range=(maxM>minM&&minM<900)?maxM-minM:0,score=Math.round(Math.min(100,coverage*.45+stability*.45+Math.min(10,range)*1));scoreEl.textContent=score;detailEl.textContent='안정도 '+Math.round(stability)+' · 음역 '+range.toFixed(1)+' semitone';draw();requestAnimationFrame(loop)}
-document.getElementById('mic').onclick=startMic;
-</script></body></html>
+function resetStats(){history=[];voiced=0;total=0;minM=999;maxM=-999;stabilitySum=0;lastM=null;finalValue=0;scoreEl.textContent='0';detailEl.textContent='안정도 0 · 음역 0';noteEl.textContent='--';hzEl.textContent='0 Hz';levelEl.style.width='0%';draw()}
+function renderSongs(){songsEl.innerHTML='';songs.forEach((s,i)=>{const b=document.createElement('button');b.className='song'+(i===current?' active':'');b.textContent=s.t;b.onclick=()=>selectSong(i);songsEl.appendChild(b)})}
+function selectSong(i){current=i;analysisRunning=false;resetStats();renderSongs();$('songTitle').textContent=songs[i].t;$('durationLabel').textContent='길이 확인 중';$('timeNow').textContent='0:00';$('timeTotal').textContent='0:00';$('progress').style.width='0%';statusEl.textContent=micReady?'준비됨':'마이크 대기';if(playerReady){player.cueVideoById(songs[i].id);setTimeout(updateDuration,700)}$('result').classList.remove('show')}
+window.onYouTubeIframeAPIReady=function(){player=new YT.Player('yt',{videoId:songs[current].id,playerVars:{playsinline:1,rel:0,controls:1,enablejsapi:1},events:{onReady:()=>{playerReady=true;$('startBtn').disabled=!micReady;updateDuration();startProgressWatch()},onStateChange:onPlayerState}})};
+function onPlayerState(e){if(e.data===YT.PlayerState.PLAYING){analysisRunning=micReady;statusEl.textContent=micReady?'전체곡 채점 중':'마이크 필요'}else if(e.data===YT.PlayerState.PAUSED){analysisRunning=false;statusEl.textContent='일시정지'}else if(e.data===YT.PlayerState.ENDED){analysisRunning=false;statusEl.textContent='곡 완료';showResult()}else if(e.data===YT.PlayerState.CUED){analysisRunning=false;updateDuration()}}
+function updateDuration(){if(!playerReady)return;const d=player.getDuration()||0;$('timeTotal').textContent=fmt(d);$('durationLabel').textContent=d?('전체 '+fmt(d)):'전체곡';}
+function startProgressWatch(){clearInterval(progressTimer);progressTimer=setInterval(()=>{if(!playerReady)return;const t=player.getCurrentTime()||0,d=player.getDuration()||0;$('timeNow').textContent=fmt(t);$('timeTotal').textContent=fmt(d);$('progress').style.width=(d?Math.min(100,t/d*100):0)+'%';},250)}
+function pitch(a,sr){let n=a.length,rms=0;for(let i=0;i<n;i++)rms+=a[i]*a[i];rms=Math.sqrt(rms/n);if(rms<.008)return[-1,rms];let best=0,lag0=-1,min=Math.floor(sr/900),max=Math.min(Math.floor(sr/70),n-2);for(let lag=min;lag<=max;lag+=2){let c=0;for(let i=0;i<n-lag;i+=2)c+=a[i]*a[i+lag];if(c>best){best=c;lag0=lag}}if(lag0<0)return[-1,rms];let f=sr/lag0;return[(f>=70&&f<=900)?f:-1,rms]}
+function draw(){let w=cv.clientWidth,h=cv.clientHeight;ctx.clearRect(0,0,w,h);ctx.strokeStyle='rgba(100,220,255,.12)';ctx.lineWidth=1;for(let y=20;y<h;y+=32){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}if(history.length<2)return;let vals=history.filter(x=>x>0);if(!vals.length)return;let lo=Math.min(...vals)-2,hi=Math.max(...vals)+2;if(hi-lo<4){lo-=2;hi+=2}ctx.strokeStyle='#59efff';ctx.lineWidth=3;ctx.beginPath();let begun=false;history.forEach((m,i)=>{if(m<=0){begun=false;return}let x=i/Math.max(1,history.length-1)*w,y=h-(m-lo)/(hi-lo)*h;if(!begun){ctx.moveTo(x,y);begun=true}else ctx.lineTo(x,y)});ctx.stroke()}
+function computeScore(){let coverage=total?voiced/total*100:0,stability=voiced>1?stabilitySum/(voiced-1):0,range=(maxM>minM&&minM<900)?maxM-minM:0;finalValue=Math.round(Math.min(100,coverage*.42+stability*.48+Math.min(10,range)*1));scoreEl.textContent=finalValue;detailEl.textContent='안정도 '+Math.round(stability)+' · 음역 '+range.toFixed(1)+' semitone';return{coverage,stability,range,score:finalValue}}
+async function connectMic(){try{if(!mediaStream)mediaStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});if(!ac)ac=new (window.AudioContext||window.webkitAudioContext)();await ac.resume();an=ac.createAnalyser();an.fftSize=2048;ac.createMediaStreamSource(mediaStream).connect(an);buf=new Float32Array(an.fftSize);micReady=true;statusEl.textContent='마이크 연결됨';$('mic').textContent='✓ 마이크 연결됨';$('mic').disabled=true;$('startBtn').disabled=!playerReady;if(!raf)loop()}catch(e){statusEl.textContent='마이크 실패';alert('Safari에서 이 사이트의 마이크 권한을 허용해 주세요.')}}
+function startWholeSong(){if(!micReady||!playerReady)return;resetStats();$('result').classList.remove('show');statusEl.textContent='전체곡 시작';player.seekTo(0,true);player.playVideo();}
+function loop(){raf=requestAnimationFrame(loop);if(!an)return;an.getFloatTimeDomainData(buf);let [f,rms]=pitch(buf,ac.sampleRate);levelEl.style.width=Math.min(100,rms*650)+'%';if(!analysisRunning){if(f>0){let m=hz2m(f);noteEl.textContent=name(Math.round(m));hzEl.textContent=f.toFixed(1)+' Hz'}else{noteEl.textContent='--';hzEl.textContent='0 Hz'}return}total++;if(f>0){voiced++;let m=hz2m(f);noteEl.textContent=name(Math.round(m));hzEl.textContent=f.toFixed(1)+' Hz';minM=Math.min(minM,m);maxM=Math.max(maxM,m);if(lastM!==null)stabilitySum+=Math.max(0,100-Math.abs(m-lastM)*28);lastM=m;history.push(m)}else{noteEl.textContent='--';hzEl.textContent='0 Hz';history.push(-1);lastM=null}if(history.length>260)history.shift();computeScore();draw()}
+function showResult(){const r=computeScore();$('resultTitle').textContent=songs[current].t+' 완료';$('finalScore').textContent=r.score;$('rStability').textContent=Math.round(r.stability);$('rRange').textContent=r.range.toFixed(1);$('rVoice').textContent=Math.round(r.coverage)+'%';$('result').classList.add('show')}
+$('mic').onclick=connectMic;$('startBtn').onclick=startWholeSong;$('again').onclick=()=>{ $('result').classList.remove('show');startWholeSong()};$('closeResult').onclick=()=>$('result').classList.remove('show');
+renderSongs();$('songTitle').textContent=songs[0].t;
+</script>
+</body></html>
