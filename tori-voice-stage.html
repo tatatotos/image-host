@@ -47,7 +47,7 @@
 <script src="https://www.youtube.com/iframe_api"></script>
 <script>
 const S=[
-  {t:'아이유 - 좋은 날',id:'NbmtT4n2hyk',url:'https://www.youtube.com/watch?v=NbmtT4n2hyk'},
+  {t:'아이유 - 좋은 날',id:'4WkAVZ_ZsYM',url:'https://www.youtube.com/watch?v=4WkAVZ_ZsYM'},
   {t:'아이유 - 너랑 나',id:'A5-tvme6Bn8',url:'https://www.youtube.com/watch?v=A5-tvme6Bn8'},
   {t:'아이유 메들리',id:'b7sDVTIC5m0',url:'https://www.youtube.com/watch?v=b7sDVTIC5m0'}
 ];
@@ -85,7 +85,8 @@ window.onYouTubeIframeAPIReady=()=>P=new YT.Player('yt',{
   playerVars:{playsinline:1,rel:0,controls:1,enablejsapi:1},
   events:{
     onReady:()=>{pr=true;dur();enable();watch();autoAnalyze()},
-    onStateChange:e=>{if(e.data===1)run=mr&&ready;else if(e.data===2)run=false;else if(e.data===0){run=false;flush();result()}}
+    onStateChange:e=>{if(e.data===1)run=mr&&ready;else if(e.data===2)run=false;else if(e.data===0){run=false;flush();result()}},
+    onError:e=>{setRefState('영상 재생 오류 · 다른 영상으로 교체 필요','#ff6680',0)}
   }
 });
 
@@ -205,11 +206,11 @@ async function autoAnalyze(force=false){
   $('autoText').textContent=S[ci].url;
   setRefState('YouTube 링크 확인 중','#ffd36a',6);
   try{
-    const infoR=await fetch('/karaoke-youtube-stream-fallback?id='+encodeURIComponent(id)+'&v=7',{cache:'no-store'}),info=await infoR.json();
+    const infoR=await fetch('/karaoke-youtube-stream-fallback?id='+encodeURIComponent(id)+'&v=8',{cache:'no-store'}),info=await infoR.json();
     if(token!==analysisToken)return;
     if(!info.ok)throw Error(info.message||info.error||'STREAM_INFO_FAILED');
     setRefState('오디오 불러오는 중','#59efff',18);
-    const r=await fetch('/voice-stage-audio?id='+encodeURIComponent(id)+'&v=7',{cache:'no-store'});
+    const r=await fetch('/voice-stage-audio?id='+encodeURIComponent(id)+'&v=8',{cache:'no-store'});
     if(!r.ok)throw Error('AUDIO_HTTP_'+r.status);
     const ab=await r.arrayBuffer();
     if(token!==analysisToken)return;
