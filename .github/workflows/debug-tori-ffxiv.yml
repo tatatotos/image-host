@@ -1,0 +1,32 @@
+name: Debug TORI FFXIV Reference
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/debug-tori-ffxiv.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait and fetch TORI discovery
+        run: |
+          sleep 35
+          curl -fL --retry 4 --retry-delay 5 'https://tk.karaoketori.p-e.kr/_tori/ffxiv-goodday?v=2' -o tori-ffxiv-goodday-debug.json
+          python -m json.tool tori-ffxiv-goodday-debug.json | head -n 400
+      - name: Commit result
+        run: |
+          git config user.name 'tori-debug-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add tori-ffxiv-goodday-debug.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Capture TORI FFXIV Good Day discovery'
+          git pull --rebase origin main
+          git push
