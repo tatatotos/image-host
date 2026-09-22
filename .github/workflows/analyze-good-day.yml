@@ -13,128 +13,168 @@ permissions:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install tools
+      - name: Install MIDI tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
-          python -m pip install yt-dlp numpy scipy librosa soundfile
+          python -m pip install requests beautifulsoup4 mido
 
-      - name: Download YouTube audio
-        shell: bash
+      - name: Download public reference MIDI
         run: |
-          set -euxo pipefail
-          URL='https://www.youtube.com/watch?v=2stwr_olRDw'
-          rm -f goodday.*
-          yt-dlp --no-playlist --extract-audio --audio-format wav --audio-quality 0 \
-            --extractor-args 'youtube:player_client=web_safari,android' \
-            -o 'goodday.%(ext)s' "$URL" || \
-          yt-dlp --no-playlist --extract-audio --audio-format wav --audio-quality 0 \
-            -o 'goodday.%(ext)s' "$URL"
-          test -f goodday.wav
+          cat > /tmp/download_midi.py <<'PY'
+          import html
+          import requests
+          from bs4 import BeautifulSoup
+          from urllib.parse import urljoin
 
-      - name: Build pitch and timing reference
+          PAGE='https://midiex.net/midi/161412'
+          s=requests.Session()
+          s.headers.update({
+              'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36',
+              'Accept-Language':'ko-KR,ko;q=0.9,en;q=0.7'
+          })
+          r=s.get(PAGE,timeout=20)
+          r.raise_for_status()
+          soup=BeautifulSoup(r.text,'html.parser')
+          href=''
+          for a in soup.find_all('a',href=True):
+              h=html.unescape(a.get('href',''))
+              text=a.get_text(' ',strip=True)
+              if 'download.php' in h and ('좋은날' in text or '.mid' in text.lower()):
+                  href=urljoin(PAGE,h);break
+          if not href:
+              for a in soup.find_all('a',href=True):
+                  h=html.unescape(a.get('href',''))
+                  if 'download.php' in h and 'bo_table=midi' in h:
+                      href=urljoin(PAGE,h);break
+          if not href:
+              raise SystemExit('MIDI attachment URL not found')
+          d=s.get(href,headers={'Referer':PAGE},timeout=25,allow_redirects=True)
+          d.raise_for_status()
+          data=d.content
+          if len(data)<100 or data[:4] != b'MThd':
+              raise SystemExit('Downloaded attachment is not MIDI: %r len=%d' % (data[:20],len(data)))
+          open('goodday.mid','wb').write(data)
+          print('downloaded',len(data),'bytes',href)
+          PY
+          python /tmp/download_midi.py
+
+      - name: Convert MIDI to target-note timeline
         run: |
-          cat > /tmp/analyze.py <<'PY'
+          cat > /tmp/midi_to_ref.py <<'PY'
           import json, math
-          import numpy as np
-          import librosa
+          import mido
 
-          VIDEO_ID = '2stwr_olRDw'
-          y, sr = librosa.load('goodday.wav', sr=22050, mono=True)
-          # Keep pitched/harmonic material and suppress much of the percussion.
-          yh = librosa.effects.harmonic(y, margin=2.0)
-          fmin = librosa.note_to_hz('C2')
-          fmax = librosa.note_to_hz('C7')
-          hop = 256
-          f0, voiced, prob = librosa.pyin(
-              yh, fmin=fmin, fmax=fmax, sr=sr,
-              frame_length=2048, hop_length=hop,
-              fill_na=np.nan
-          )
-          times = librosa.frames_to_time(np.arange(len(f0)), sr=sr, hop_length=hop)
-          rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=hop, center=True)[0]
-          rms_thr = max(float(np.percentile(rms, 28)), 0.006)
+          VIDEO_ID='2stwr_olRDw'
+          VIDEO_DURATION=236.0
+          mid=mido.MidiFile('goodday.mid')
+          tpb=mid.ticks_per_beat
 
-          frames=[]
-          for t,hz,v,p,r in zip(times,f0,voiced,prob,rms):
-              if not np.isfinite(hz) or not bool(v) or float(p or 0) < 0.52 or float(r) < rms_thr:
-                  frames.append((float(t), None, float(p or 0)))
-                  continue
-              midi=float(librosa.hz_to_midi(hz))
-              if midi < 36 or midi > 96:
-                  frames.append((float(t), None, float(p or 0)))
-                  continue
-              frames.append((float(t), int(round(midi)), float(p or 0)))
+          # Build a global tempo map from all tracks.
+          tempo_events=[(0,500000)]
+          for tr in mid.tracks:
+              tick=0
+              for msg in tr:
+                  tick += msg.time
+                  if msg.type=='set_tempo': tempo_events.append((tick,msg.tempo))
+          tempo_events.sort(key=lambda x:x[0])
+          compact=[]
+          for tick,tempo in tempo_events:
+              if compact and compact[-1][0]==tick: compact[-1]=(tick,tempo)
+              else: compact.append((tick,tempo))
+          tempo_events=compact
 
-          # median smooth pitch classes over ~90 ms
-          vals=[x[1] for x in frames]
-          sm=[]
-          for i,m in enumerate(vals):
-              cand=[v for v in vals[max(0,i-3):min(len(vals),i+4)] if v is not None]
-              sm.append(int(round(float(np.median(cand)))) if cand else None)
+          seg=[]; sec=0.0; last_tick=0; last_tempo=500000
+          for tick,tempo in tempo_events:
+              sec += (tick-last_tick)*last_tempo/1_000_000/tpb
+              seg.append((tick,sec,tempo))
+              last_tick=tick; last_tempo=tempo
 
-          notes=[]
-          cur=None
-          frame_dt=hop/sr
-          for i,m in enumerate(sm):
-              t=frames[i][0]
-              if m is None:
-                  if cur and t-cur['start'] >= 0.12:
-                      cur['end']=t
-                      notes.append(cur)
-                  cur=None
-                  continue
-              if cur is None:
-                  cur={'start':t,'end':t+frame_dt,'pitch':m,'samples':1}
-                  continue
-              if abs(m-cur['pitch']) <= 1 and t-cur['end'] < 0.12:
-                  cur['pitch']=int(round((cur['pitch']*cur['samples']+m)/(cur['samples']+1)))
-                  cur['samples']+=1
-                  cur['end']=t+frame_dt
-              else:
-                  if cur['end']-cur['start'] >= 0.12:
-                      notes.append(cur)
-                  cur={'start':t,'end':t+frame_dt,'pitch':m,'samples':1}
-          if cur and cur['end']-cur['start'] >= 0.12:
-              notes.append(cur)
+          def tick_to_sec(tick):
+              lo=0; hi=len(seg)-1; idx=0
+              while lo<=hi:
+                  m=(lo+hi)//2
+                  if seg[m][0] <= tick: idx=m; lo=m+1
+                  else: hi=m-1
+              st,ss,tp=seg[idx]
+              return ss+(tick-st)*tp/1_000_000/tpb
 
-          # merge same-note fragments separated by tiny gaps
-          merged=[]
+          candidates=[]
+          for ti,tr in enumerate(mid.tracks):
+              tick=0; active={}; notes=[]
+              for msg in tr:
+                  tick += msg.time
+                  if msg.type=='note_on' and msg.velocity>0:
+                      active.setdefault((msg.channel,msg.note),[]).append((tick,msg.velocity))
+                  elif msg.type in ('note_off','note_on') and (msg.type=='note_off' or msg.velocity==0):
+                      k=(msg.channel,msg.note)
+                      if k in active and active[k]:
+                          st,vel=active[k].pop(0)
+                          if tick>st:
+                              notes.append({'start':tick_to_sec(st),'end':tick_to_sec(tick),'pitch':msg.note,'vel':vel})
+              if len(notes)<20: continue
+              pitches=[n['pitch'] for n in notes]
+              mean=sum(pitches)/len(pitches)
+              hi_ratio=sum(1 for p in pitches if p>=60)/len(pitches)
+              # Vocal/lead is normally the higher of the two piano staves.
+              score=mean + hi_ratio*22 + min(8,len(notes)/120)
+              candidates.append((score,ti,notes,mean,hi_ratio))
+
+          if not candidates: raise SystemExit('No usable note tracks')
+          candidates.sort(reverse=True,key=lambda x:x[0])
+          score,ti,notes,mean,hi_ratio=candidates[0]
+          print('chosen track',ti,'notes',len(notes),'mean',mean,'hi_ratio',hi_ratio)
+
+          # Collapse simultaneous piano chords to their highest note, which is the lead line
+          # for this public piano transcription.
+          notes.sort(key=lambda n:(n['start'],-n['pitch']))
+          groups=[]
           for n in notes:
-              n={k:n[k] for k in ('start','end','pitch')}
-              if merged and merged[-1]['pitch']==n['pitch'] and n['start']-merged[-1]['end'] < 0.15:
-                  merged[-1]['end']=n['end']
-              else:
-                  merged.append(n)
-          merged=[n for n in merged if n['end']-n['start'] >= 0.13]
+              if not groups or abs(n['start']-groups[-1][0]['start'])>0.035:
+                  groups.append([n])
+              else: groups[-1].append(n)
+          lead=[]
+          for g in groups:
+              n=max(g,key=lambda x:x['pitch'])
+              if n['end']-n['start'] < 0.045: continue
+              lead.append({'start':n['start'],'end':n['end'],'pitch':int(n['pitch'])})
 
-          # Round for compact transfer.
+          # Merge repeated adjacent notes.
+          merged=[]
+          for n in lead:
+              if merged and merged[-1]['pitch']==n['pitch'] and n['start']-merged[-1]['end']<0.08:
+                  merged[-1]['end']=max(merged[-1]['end'],n['end'])
+              else: merged.append(n.copy())
+
+          midi_duration=max((n['end'] for n in merged),default=1.0)
+          # Keep the score's relative timing but gently fit it to the selected 3:56 video.
+          scale=VIDEO_DURATION/midi_duration if 0.92 <= VIDEO_DURATION/midi_duration <= 1.10 else 1.0
           for n in merged:
-              n['start']=round(float(n['start']),3)
-              n['end']=round(float(n['end']),3)
-              n['pitch']=int(n['pitch'])
+              n['start']=round(n['start']*scale,3)
+              n['end']=round(n['end']*scale,3)
 
           out={
-              'version':1,
+              'version':2,
               'videoId':VIDEO_ID,
-              'source':'github-actions-youtube-audio-pyin',
-              'duration':round(len(y)/sr,3),
-              'noteCount':len(merged),
+              'source':'Midiex public MIDI 161412; author allows redistribution with attribution and modification',
+              'sourceUrl':'https://midiex.net/midi/161412',
+              'track':ti,
+              'duration':round(midi_duration*scale,3),
+              'videoDuration':VIDEO_DURATION,
+              'scale':round(scale,8),
               'offset':0.0,
+              'noteCount':len(merged),
               'notes':merged
           }
+          if len(merged)<80: raise SystemExit('Too few reference notes: %d'%len(merged))
           with open('good-day-2stwr_olRDw.json','w',encoding='utf-8') as f:
               json.dump(out,f,ensure_ascii=False,separators=(',',':'))
-          print('duration',out['duration'],'notes',out['noteCount'])
-          if len(merged) < 40:
-              raise SystemExit('Too few notes extracted')
+          print('reference notes',len(merged),'duration',out['duration'],'scale',scale)
           PY
-          python /tmp/analyze.py
+          python /tmp/midi_to_ref.py
 
       - name: Commit reference JSON
         run: |
@@ -142,5 +182,6 @@ jobs:
           git config user.email 'actions@users.noreply.github.com'
           git add good-day-2stwr_olRDw.json
           git diff --cached --quiet && exit 0
-          git commit -m 'Generate Good Day pitch reference'
+          git commit -m 'Generate Good Day target-note reference'
+          git pull --rebase origin main
           git push
