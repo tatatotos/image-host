@@ -13,181 +13,211 @@ permissions:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install browser and MIDI tools
+      - name: Install MIDI parser
         run: |
           python -m pip install --upgrade pip
-          python -m pip install playwright mido
-          python -m playwright install --with-deps chromium
+          python -m pip install mido requests
 
-      - name: Download Good Day MIDI in browser session
+      - name: Download public Good Day MIDI
         run: |
-          cat > /tmp/download_midi.py <<'PY'
-          import os, urllib.parse
-          from playwright.sync_api import sync_playwright
-
-          PAGE='https://midiex.net/midi/161412'
-          OUT=os.path.abspath('goodday.mid')
-
-          with sync_playwright() as p:
-              browser=p.chromium.launch(headless=True)
-              context=browser.new_context(
-                  accept_downloads=True,
-                  locale='ko-KR',
-                  user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36'
-              )
-              page=context.new_page()
-              page.goto(PAGE,wait_until='networkidle',timeout=60000)
-              print('title=',page.title())
-              link=page.locator('a[href*="download.php"]').first
-              if not link.count():
-                  raise RuntimeError('download link not found')
-              href=link.get_attribute('href') or ''
-              href=urllib.parse.urljoin(PAGE,href)
-              print('attachment=',href)
-
-              # This request shares the live Chromium cookie jar and the fresh nonce
-              # generated for this exact page load.
-              resp=context.request.get(href,headers={
-                  'Referer':PAGE,
-                  'Accept':'audio/midi,audio/x-midi,application/octet-stream,*/*;q=0.8'
-              },timeout=45000,fail_on_status_code=False)
-              data=resp.body()
-              print('attachment response=',resp.status,resp.url,resp.headers.get('content-type'),len(data),repr(data[:32]))
-
-              if data[:4] != b'MThd':
-                  # Some Gnuboard installations start the real download only after a click.
-                  # Click once, then request the SAME saved nonce URL again with cookies.
-                  try:
-                      page.goto(PAGE,wait_until='domcontentloaded',timeout=30000)
-                      page.locator('a[href*="download.php"]').first.click(timeout=10000,no_wait_after=True)
-                      page.wait_for_timeout(1200)
-                  except Exception as e:
-                      print('click assist=',repr(e))
-                  resp=context.request.get(href,headers={'Referer':PAGE},timeout=45000,fail_on_status_code=False)
-                  data=resp.body()
-                  print('second response=',resp.status,resp.url,resp.headers.get('content-type'),len(data),repr(data[:32]))
-              browser.close()
-
+          python - <<'PY'
+          import requests
+          PAGE='https://ffxivbard.com/song/7569'
+          URL='https://ffxivbard.com/song/download/7569?disposition=attachment'
+          s=requests.Session()
+          s.headers.update({
+              'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/153 Safari/537.36',
+              'Accept-Language':'en-US,en;q=0.9,ko;q=0.8'
+          })
+          p=s.get(PAGE,timeout=30)
+          print('page',p.status_code,p.url,len(p.content))
+          p.raise_for_status()
+          r=s.get(URL,headers={'Referer':PAGE,'Accept':'audio/midi,audio/x-midi,application/octet-stream,*/*;q=0.8'},timeout=60,allow_redirects=True)
+          data=r.content
+          print('download',r.status_code,r.url,r.headers.get('content-type'),len(data),repr(data[:32]))
+          r.raise_for_status()
           if data[:4] != b'MThd':
-              print(data[:1600].decode('utf-8','ignore'))
-              raise SystemExit('Downloaded payload is not MIDI')
-          open(OUT,'wb').write(data)
-          print('MIDI OK=',len(data),'bytes')
+              print(data[:1000].decode('utf-8','ignore'))
+              raise SystemExit('FFXIV Bard download was not MIDI')
+          open('goodday.mid','wb').write(data)
+          print('MIDI OK',len(data),'bytes')
           PY
-          python /tmp/download_midi.py
 
       - name: Convert MIDI to target-note timeline
         run: |
           cat > /tmp/midi_to_ref.py <<'PY'
-          import json
+          import json, statistics
           import mido
 
           VIDEO_ID='2stwr_olRDw'
           VIDEO_DURATION=236.0
+          SOURCE_URL='https://ffxivbard.com/song/7569'
+          DOWNLOAD_URL='https://ffxivbard.com/song/download/7569?disposition=attachment'
+
           mid=mido.MidiFile('goodday.mid')
           tpb=mid.ticks_per_beat
 
+          # Global tempo map. MIDI tempo defaults to 120 BPM until a set_tempo event appears.
           tempo_events=[(0,500000)]
           for tr in mid.tracks:
               tick=0
               for msg in tr:
                   tick += msg.time
-                  if msg.type=='set_tempo': tempo_events.append((tick,msg.tempo))
+                  if msg.type=='set_tempo':
+                      tempo_events.append((tick,int(msg.tempo)))
           tempo_events.sort(key=lambda x:x[0])
           compact=[]
           for tick,tempo in tempo_events:
-              if compact and compact[-1][0]==tick: compact[-1]=(tick,tempo)
-              else: compact.append((tick,tempo))
+              if compact and compact[-1][0]==tick:
+                  compact[-1]=(tick,tempo)
+              else:
+                  compact.append((tick,tempo))
           tempo_events=compact
 
-          seg=[]; sec=0.0; last_tick=0; last_tempo=500000
+          segments=[]
+          sec=0.0
+          last_tick=0
+          last_tempo=500000
           for tick,tempo in tempo_events:
               sec += (tick-last_tick)*last_tempo/1_000_000/tpb
-              seg.append((tick,sec,tempo))
-              last_tick=tick; last_tempo=tempo
+              segments.append((tick,sec,tempo))
+              last_tick=tick
+              last_tempo=tempo
 
           def tick_to_sec(tick):
-              lo=0; hi=len(seg)-1; idx=0
+              lo,hi,idx=0,len(segments)-1,0
               while lo<=hi:
                   m=(lo+hi)//2
-                  if seg[m][0] <= tick: idx=m; lo=m+1
-                  else: hi=m-1
-              st,ss,tp=seg[idx]
+                  if segments[m][0] <= tick:
+                      idx=m; lo=m+1
+                  else:
+                      hi=m-1
+              st,ss,tp=segments[idx]
               return ss+(tick-st)*tp/1_000_000/tpb
 
+          # Extract note spans per MIDI track.
           tracks=[]
           for ti,tr in enumerate(mid.tracks):
-              tick=0; active={}; notes=[]
+              tick=0
+              active={}
+              notes=[]
               for msg in tr:
                   tick += msg.time
+                  ch=getattr(msg,'channel',0)
                   if msg.type=='note_on' and msg.velocity>0:
-                      active.setdefault((getattr(msg,'channel',0),msg.note),[]).append((tick,msg.velocity))
+                      active.setdefault((ch,msg.note),[]).append((tick,int(msg.velocity)))
                   elif msg.type in ('note_off','note_on') and (msg.type=='note_off' or getattr(msg,'velocity',0)==0):
-                      k=(getattr(msg,'channel',0),msg.note)
-                      if k in active and active[k]:
-                          st,vel=active[k].pop(0)
+                      key=(ch,msg.note)
+                      if key in active and active[key]:
+                          st,vel=active[key].pop(0)
                           if tick>st:
-                              notes.append({'start':tick_to_sec(st),'end':tick_to_sec(tick),'pitch':int(msg.note),'vel':int(vel)})
+                              notes.append({
+                                  'start':tick_to_sec(st),
+                                  'end':tick_to_sec(tick),
+                                  'pitch':int(msg.note),
+                                  'vel':vel
+                              })
               if notes:
                   ps=[n['pitch'] for n in notes]
-                  tracks.append({'index':ti,'notes':notes,'mean':sum(ps)/len(ps),'count':len(notes),'high':sum(p>=60 for p in ps)/len(ps)})
+                  dur=max(n['end'] for n in notes)
+                  tracks.append({
+                      'index':ti,
+                      'notes':notes,
+                      'count':len(notes),
+                      'mean':sum(ps)/len(ps),
+                      'median':statistics.median(ps),
+                      'min':min(ps),
+                      'max':max(ps),
+                      'highRatio':sum(p>=60 for p in ps)/len(ps),
+                      'duration':dur
+                  })
 
-          if not tracks: raise SystemExit('No note tracks')
-          print('tracks=',[(x['index'],x['count'],round(x['mean'],1),round(x['high'],2)) for x in tracks])
-          chosen=max(tracks,key=lambda x:(x['mean']+x['high']*20+min(10,x['count']/80)))
-          notes=chosen['notes']
-          print('chosen=',chosen['index'],'raw=',len(notes),'mean=',chosen['mean'])
+          if not tracks:
+              raise SystemExit('No note tracks found')
 
-          notes.sort(key=lambda n:(n['start'],-n['pitch']))
+          print('TRACK STATS')
+          for tr in tracks:
+              print(tr['index'],'count',tr['count'],'mean',round(tr['mean'],1),'median',tr['median'],'range',tr['min'],tr['max'],'high',round(tr['highRatio'],2),'dur',round(tr['duration'],2))
+
+          # FFXIV Bard arrangement says Trio / Harp / all tracks.  For a karaoke guide,
+          # choose the track most likely to be the lead: sufficiently dense, high register,
+          # and long enough to cover most of the song.  This avoids bass/accompaniment tracks.
+          max_dur=max(t['duration'] for t in tracks)
+          candidates=[t for t in tracks if t['count']>=40 and t['duration']>=max_dur*0.55]
+          if not candidates:
+              candidates=tracks
+          def lead_score(t):
+              density=min(16.0,t['count']/55.0)
+              register=t['mean'] + t['highRatio']*22.0
+              coverage=(t['duration']/max_dur)*12.0
+              low_penalty=max(0,52-t['median'])*2.5
+              return register+density+coverage-low_penalty
+          chosen=max(candidates,key=lead_score)
+          print('CHOSEN TRACK',chosen['index'],'score',round(lead_score(chosen),2))
+
+          notes=sorted(chosen['notes'],key=lambda n:(n['start'],-n['pitch']))
+
+          # If the selected lead track contains chords, use the highest simultaneous note
+          # as the sung guide.  Adjacent repetitions of the same pitch are merged.
           groups=[]
           for n in notes:
-              if not groups or abs(n['start']-groups[-1][0]['start'])>0.035:
+              if not groups or abs(n['start']-groups[-1][0]['start'])>0.045:
                   groups.append([n])
-              else: groups[-1].append(n)
+              else:
+                  groups[-1].append(n)
           lead=[]
           for g in groups:
-              n=max(g,key=lambda x:x['pitch'])
-              if n['end']-n['start']>=0.055:
+              # Prefer the longest high note when a chord starts at the same instant.
+              n=max(g,key=lambda x:(x['pitch'],x['end']-x['start']))
+              if n['end']-n['start'] >= 0.055:
                   lead.append({'start':n['start'],'end':n['end'],'pitch':n['pitch']})
+
           merged=[]
           for n in lead:
-              if merged and merged[-1]['pitch']==n['pitch'] and n['start']-merged[-1]['end']<0.09:
+              if merged and merged[-1]['pitch']==n['pitch'] and n['start']-merged[-1]['end']<0.10:
                   merged[-1]['end']=max(merged[-1]['end'],n['end'])
-              else: merged.append(dict(n))
+              else:
+                  merged.append(dict(n))
 
-          score_duration=max((n['end'] for n in merged),default=1.0)
-          ratio=VIDEO_DURATION/score_duration
-          scale=ratio if 0.88<=ratio<=1.15 else 1.0
+          if len(merged)<40:
+              raise SystemExit('Too few guide notes: %d'%len(merged))
+
+          midi_duration=max(n['end'] for n in merged)
+          ratio=VIDEO_DURATION/midi_duration
+          # Keep score timing intact unless duration difference is plausibly intro/outro/stretch.
+          scale=ratio if 0.90 <= ratio <= 1.12 else 1.0
           for n in merged:
               n['start']=round(n['start']*scale,3)
               n['end']=round(n['end']*scale,3)
               n['pitch']=int(n['pitch'])
 
-          if len(merged)<20: raise SystemExit('Too few reference notes: %d'%len(merged))
           out={
-              'version':5,
+              'version':7,
               'videoId':VIDEO_ID,
-              'source':'Midiex 161412 self-made Good Day MIDI; attribution required; modification allowed',
-              'sourceUrl':'https://midiex.net/midi/161412',
+              'source':'FFXIV-Bard Good Day - IU arrangement uploaded by Anonymous, crafter A\'two Korea',
+              'sourceUrl':SOURCE_URL,
+              'downloadUrl':DOWNLOAD_URL,
               'track':chosen['index'],
-              'scoreDuration':round(score_duration,3),
+              'midiDuration':round(midi_duration,3),
               'videoDuration':VIDEO_DURATION,
               'scale':round(scale,8),
               'offset':0.0,
               'noteCount':len(merged),
+              'pitchMin':min(n['pitch'] for n in merged),
+              'pitchMax':max(n['pitch'] for n in merged),
               'notes':merged
           }
           with open('good-day-2stwr_olRDw.json','w',encoding='utf-8') as f:
               json.dump(out,f,ensure_ascii=False,separators=(',',':'))
-          print('REFERENCE OK',out['noteCount'],'notes duration',out['scoreDuration'],'scale',out['scale'])
+          print('REFERENCE OK',out['noteCount'],'notes','range',out['pitchMin'],out['pitchMax'],'midiDuration',out['midiDuration'],'scale',out['scale'])
           PY
           python /tmp/midi_to_ref.py
 
-      - name: Commit reference JSON
+      - name: Commit fixed reference JSON
         run: |
           git config user.name 'tori-voice-stage-bot'
           git config user.email 'actions@users.noreply.github.com'
